@@ -1,0 +1,789 @@
+#!/bin/env lua
+
+--- regression.rig -- Set up infrastructure for regression tests
+
+-- We try to distil tests down to one-liners, with special emphasis
+-- on probing the edge cases of various situations to see that all
+-- documented behaviour works as expected, and that cases that fall
+-- outside the criteria, especially cases only just outside the
+-- boundaries of documented behaviour, are rejected.
+
+--[[
+NOTE: Nearly all files in hstbm are derived from GNU Grep, and so are
+owned by the FSF and have GPL3 license; however, a few files, heavily
+dependent on Lua and created independently of GNU Grep, are owned by
+Grouse Software, and have the MIT License in order to be compatible
+with the Lua ecosystem.  Any file not explicitly marked is intended
+to be FSF-owned and GPL3-licensed.
+
+This file (regression.rig) is licensed under the MIT License.
+--]]
+
+--[[
+Copyright (C) 2014-2015 Grouse Software
+Written by behoffski (Brenton Hoff).
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+--]]
+
+local io     = require("io")
+local os     = require("os")
+local string = require("string")
+local table  = require("table")
+
+require("luarocks.loader")
+local posix = require("posix")
+local PE = require("PosixExec")
+
+local strictness = require("strictness")
+
+local Program = "../src/h"
+local DefaultDelim = ':'
+local TestFile = arg[1]
+local SectionName = "(untitled)"
+
+local WorstStatus = 0
+
+strictness.strict(_G)
+TestEnvGlobals = nil
+
+------------------------------------------------------------------------
+
+local function printf(fmt, ...)
+        io.write(fmt:format(...))
+end
+
+------------------------------------------------------------------------
+
+local TestHeader = string.format([[
+        local Pattern   = "Pattern"
+        local Match     = "Match"
+        local NoMatch   = "NoMatch"
+        local XFailShow = "XFailShow"
+        local Trouble   = "Trouble"
+        local function Section(o)
+                o.SectionName = o[1]
+                o[1] = nil
+                o.TestSetNr = 1
+                o.Program = o.Program or %q
+                o.Delim = o.Delim or %q
+                o.Opts  = o.Opts or ""
+                o.TestFile = %q
+                o.Exec = {Match = {},
+                          NoMatch = {},
+                          Trouble = {},
+                          XFailShow = {},
+                         }
+                o.Expected = {Status = 0}
+                o.Results = {}
+                o.Summary = {OK = false}
+                TestEnvGlobals = o
+        end
+]], Program, DefaultDelim, TestFile)
+
+-- Emacs syntax highlighting gets confused, grrr:
+--]]
+
+------------------------------------------------------------------------
+
+-- State tables for byte-by-byte test line parsing, mainly to correctly
+-- handle quoting (especially backslash-escaped quote chars).
+-- DefaultAppend and IgnoreChar are helper variables to limit the number
+-- of anonymous functions (closures) we need to create.
+
+-- Wrap the entire state machine apparatus in a do...end block so that
+-- scope of local variables is limited.
+do
+        -- Initialise state table objects now so state-transition
+        -- functions can reference them.
+        local PlainField = {}
+        local QuotedField = {}
+        local Interfield = {} -- Inter-field state (see DelimPattern)
+        local EscapedChar = {}
+        local OctalCollectDigits = {}
+        local HexAfterInitialX = {}
+        local HexCollectDigits = {}
+
+        local EscapedValue
+        local HexMaxValue
+
+        local IsQuote = {}
+        IsQuote[string.byte('"')] = true
+        IsQuote[string.byte("'")] = true
+
+        -- State variables maintained during lexing
+        local CurrentQuote = nil
+        local State = ""
+        local Elem = ""
+        local ThisField = {}
+        local Fields = {}
+        local AfterEscapedState = nil
+        local FieldDelimPattern = "%s"
+
+        local IgnoreCharFn = function () end
+        local AppendSelf = {}
+        local GenericAppendSelfFn = function (Byte)
+                Elem = Elem .. string.char(Byte)
+        end
+
+        -- Functions to handle state transitions; these ones are
+        -- named as they are used in multiple places and/or are a
+        -- little tricky to read without some extra context; the
+        -- table initialisation below also uses anonymous functions
+        -- for one-off cases.
+        local EndElem = function ()
+                if State == OctalCollectDigits or
+                   State == HexCollectDigits then
+                        Elem = Elem .. string.char(EscapedValue)
+                end
+
+                if Elem ~= "" then
+                        ThisField[#ThisField + 1] = Elem
+                end
+                Elem = ""
+        end
+        local EndField = function ()
+                EndElem ()
+                Fields[#Fields + 1] = ThisField
+                ThisField = {}
+
+                -- Undo any state table editing for quoted fields
+                if CurrentQuote then
+                        QuotedField[CurrentQuote] = GenericAppendSelfFn
+                        CurrentQuote = nil
+                end
+                State = Interfield
+        end
+        local function NextIsEscapedThenPlain()
+                State = EscapedChar
+                AfterEscapedState = PlainField
+        end
+        local function NextIsEscapedThenQuoted()
+                State = EscapedChar
+                AfterEscapedState = QuotedField
+        end
+
+        -- Block-set-up all state tables to most common action; we
+        -- will tailor the tables to handle state transitions on
+        -- appropriate characters in the next step.
+        for i = 0, 255 do
+                PlainField[i] = GenericAppendSelfFn
+        end
+        for i = 0, 255 do
+                QuotedField[i] = GenericAppendSelfFn
+        end
+        for i = 0, 255 do
+                Interfield[i] = IgnoreCharFn
+        end
+
+        -- Where the default/prototype function is not sufficient for
+        -- a state (e.g. encountering a backslash escape while
+        -- working through a quoted field), then create a tailored
+        -- function (closure, especially including the upvalues i
+        -- and/or Ch) to handle the situation.
+        for i = 0, 255 do
+                local Ch = string.char(i)
+                if IsQuote[i] then
+                        Interfield[i] = function ()
+                                State = QuotedField
+                                CurrentQuote = i
+                                QuotedField[i] = EndField
+                        end
+                elseif Ch:match(FieldDelimPattern) then
+                        -- If in PlainField state, this char triggers
+                        -- an end-of-field transition (store the
+                        -- completed field, and move to Interfield
+                        -- state).
+                        PlainField[i] = EndField;
+                else
+                        -- Any non-quote and non-delimiter character
+                        -- that occurs when in the Interfield state
+                        -- triggers the start of a plain field.
+                        Interfield[i] = function (Byte)
+                                State = PlainField
+                                CurrentQuote = nil
+                                Elem = string.char(Byte)
+                        end
+                end
+
+        end
+
+        Interfield[string.byte('\\')] = NextIsEscapedThenPlain
+        PlainField[string.byte('\\')] = NextIsEscapedThenPlain
+        QuotedField[string.byte('\\')] = NextIsEscapedThenQuoted
+
+        -- Set up escape mechanism -- \r, \0, \\, \', \xXX, \ddd, etc.
+        -- Start with a default that most characters aren't special
+        -- when preceded by a backslash, then set up the 1-char cases,
+        -- then work on the multi-char \d, \dd, \ddd and \x, \xX, \xXX
+        -- cases.  We insist on ASCII encoding here.
+        for i = 0, 255 do
+                EscapedChar[i] = function ()
+                        Elem = Elem .. string.char(i)
+                        State = AfterEscapedState
+                end
+        end
+        local char = string.char
+        for _, Escapes in ipairs{{'a', char( 7)},
+                                 {'b', char( 8)},
+                                 {'f', char(12)},
+                                 {'n', char(10)},
+                                 {'r', char(13)},
+                                 {'t', char( 9)},
+                                 {'v', char(11)} } do
+                EscapedChar[string.byte(Escapes[1])] = function ()
+                        Elem = Elem .. Escapes[2]
+                        State = AfterEscapedState
+                end
+        end
+
+        -- **** Octal escapes: \d \dd \ddd (including \0)
+        -- In C, \8 and \9 (which are not part of a valid octal
+        -- number) are undefined; we follow GNU coreutils printf
+        -- behaviour here.
+        for i = '8', '9' do
+                local Esc89 = '\\' .. i
+                EscapedChar[string.byte(i)] = function ()
+                        Elem = Elem .. Esc89
+                        State = AfterEscapedState
+              end
+        end
+        for i = '0', '7' do
+                local Num = tonumber(i)
+                EscapedChar[string.byte(i)] = function ()
+                        EscapedValue = Num
+                        State = OctalCollectDigits
+                end
+        end
+        for i = 0, 255 do
+                OctalCollectDigits[i] = function ()
+                        Elem = Elem .. string.char(EscapedValue)
+                        State = AfterEscapedState
+                        State[i](i)
+                end
+        end
+        for i = '0', '7' do
+                local Byte = string.byte(i)
+                local Num = tonumber(i)
+                OctalCollectDigits[Byte] = function ()
+                        local Value = EscapedValue * 8 + Num
+                        if Value < 256 then
+                                EscapedValue = Value
+                        else
+                                Elem = Elem .. string.char(EscapedValue)
+                                State = AfterEscapedState
+                                State[Byte](Byte)
+                        end
+                end
+        end
+
+        -- **** Hex escapes: \x, \xX, \xXX
+        -- HexMaxValue leaves the gate open for HexCollectDigits to
+        -- handle longer hex sequences, e.g. Unicode \uXXXX etc.
+        EscapedChar[string.byte('x')] = function ()
+                State = HexAfterInitialX
+        end
+        for i = 0, 255 do
+                local Ch = string.char(i)
+                HexAfterInitialX[i] = function ()
+                        Elem = Elem .. 'x'
+                        State = AfterEscapedState
+                        State[i](i)
+                end
+                HexCollectDigits[i] = function ()
+                        Elem = Elem .. string.char(EscapedValue)
+                        State = AfterEscapedState
+                        State[i](i)
+                end
+        end
+        local HexString = "0123456789ABCDEFabcdef"
+        for i = 1, #HexString do
+                local Ch = HexString:sub(i, i)
+                local Num = tonumber("0x" .. Ch)
+                local Byte = string.byte(Ch)
+                HexAfterInitialX[Byte] = function ()
+                        EscapedValue = Num
+                        HexMaxValue = 255
+                        State = HexCollectDigits
+                end
+                HexCollectDigits[Byte] = function ()
+                        local Value = EscapedValue * 16 + Num
+                        if Value <= HexMaxValue then
+                                EscapedValue = Value
+                        else
+                                Elem = Elem .. string.char(EscapedValue)
+                                State = AfterEscapedState
+                                State[Byte](Byte)
+                        end
+                end
+        end
+
+        --------------------------------------------------------
+
+        -- LexLineIntoFields is the sole global symbol known outside
+        -- the state table scope.
+        LexLineIntoFields = nil -- Mark this name as a global
+        function LexLineIntoFields(Line, DelimChar)
+                Fields = {}
+                ThisField = {}
+                State = Interfield
+                local DelimByte
+                if DelimChar then
+                        DelimByte = string.byte(DelimChar:sub(1,1))
+                end
+
+                -- If a delimiter is provided, check that it is valid,
+                -- and edit within-field tables to be treat it specially.
+                if DelimChar then
+                        if DelimChar:match("%s") then
+                                error(
+                      "Delimiter cannot be a field separator char.")
+                        end
+                        PlainField[DelimByte] = EndElem
+                        QuotedField[DelimByte] = EndElem
+                end
+
+                -- Deal with each byte of the line, in turn, using
+                -- state tables to direct how we interpret the byte.
+                -- If you like, you can view each byte as an incoming
+                -- "event" to the machine, and the state tables
+                -- organise how the same event may trigger different
+                -- machine operation, depending on state (context).
+                for i = 1, #Line do
+                        local Byte = string.byte(Line:sub(i, i))
+                        State[Byte](Byte)
+                end
+
+                -- A plain field may be delimited by the end of the
+                -- line.
+                if State == PlainField then
+                        ThisField[#ThisField + 1] = Elem
+                        Fields[#Fields + 1] = ThisField
+                        State = Interfield
+                end
+
+                -- Undo the delimiter edition for plain/quoted fields
+                -- applied above (the next invocation may use a
+                -- different delimiter).
+                if DelimByte then
+                        PlainField[DelimByte] = GenericAppendSelfFn
+                        QuotedField[DelimByte] = GenericAppendSelfFn
+                end
+
+                -- If state isn't Interfield, there has been a lexing
+                -- error (unterminated quoted field?)
+                -- ?? Not checked yet.
+                return Fields
+        end
+
+-- End of the state table do-end scope.
+end
+
+------------------------------------------------------------------------
+
+-- Run a test, and report whether the results were as expected.
+-- The current implementation is crude, expecting that we can shout
+-- the entire stdin data down the pipe to the child process, and
+-- then simply read the response(s) from stdin and stderr pipes.
+
+-- We anticipate using a "select"/"poll-fds" structure at some time
+-- in the near future, and so stdin, stdout and stderr parameters
+-- here are functions that are quite comfortable about working in an
+-- incremental/on-demand fashion.
+local function RunOneTest(Env, StdinFn, StdoutFn, StderrFn)
+        -- Start by assuming that the test passed, and we can change
+        -- the status to failure at any time; running the test,
+        -- supplying input, getting output, stderr, program status
+        -- etc is complex, and there are many possible points of
+        -- failure.
+        Env.Summary.OK = true
+
+        Env.Run = {stdin = "", out = "", err = ""}
+
+        -- Spawn the child process with the program, options and any
+        -- parameters.
+        local pid, wr0, rd1, rd2 = PE.raw_exec(Env.Program,
+                                               Env.CmdlineArgs)
+        assert(pid > 0)
+        --?? Probably should be a "framework failure" rather than assert
+
+        -- Pump data from StdinFn into child's stdin pipe, until
+        -- there's no more to write.  We assume that the write will
+        -- not block here.
+        local HaveStdinData, StdinData
+        while true do
+                HaveStdinData, StdinData = StdinFn()
+                if not HaveStdinData then
+                        break
+                end
+                Env.Run.stdin = Env.Run.stdin .. StdinData
+                posix.write(wr0, StdinData)
+        end
+        posix.close(wr0)
+
+        -- Wait for the child process to act on the input, and exit.
+        -- Record the demise (exit/segfault?) and status, as these
+        -- are integral to the tests: We expect no segfaults, and
+        -- the return status is an important summary of the broad
+        -- success or failure of the operation of the program.
+        local WaitPid, Demise, Status = posix.wait(pid)
+        Env.Results.Status = Status
+        Env.Results.Demise = Demise
+
+        -- Pump out the output (stdout) generated by the child, and
+        -- run it past the function to check whether what was
+        -- produced was correct for this test run.
+        local OK, Data = StdoutFn(posix.read(rd1, 9999999))
+        if OK ~= nil then
+                Env.Results.StdoutOK = OK
+                Env.Run.out = Data
+        else
+                local _
+                Env.Results.StdoutOK, _ = StdoutFn(nil)
+                if Env.Results.StdoutOK then
+                        Env.Run.out = "(nil, OK)"
+                else
+                        Env.Run.out = "(nil, FAIL)"
+                end
+        end
+        posix.close(rd1)
+
+        -- Similarly, pump out child's stderr data, and check that
+        -- we got what we expected.
+        OK, Data = StderrFn(posix.read(rd2, 9999999))
+        if OK ~= nil then
+                Env.Results.StderrOK, Env.Results.StderrData = OK, Data
+                Env.Run.err = Data
+        else
+                Env.Results.StderrOK, Env.Results.StderrData = StderrFn(nil)
+                if Env.Results.StderrOK then
+                        Env.Run.err = "(nil, OK)"
+                else
+                        Env.Run.err = "(nil, FAIL)"
+                end
+        end
+        posix.close(rd2)
+
+        -- A failure of any component means the whole test failed.
+        if HaveStdinData
+            or not Env.Results.StdoutOK
+            or not Env.Results.StderrOK
+            or Env.Results.Demise ~= Env.Expected.Demise
+            or Env.Results.Status ~= Env.Expected.Status then
+                Env.Summary.OK = false
+        end
+end
+
+------------------------------------------------------------------------
+
+-- Match: Input must be echoed, and return status must be 0.
+-- NoMatch: Input must not be echoed, and return status must be 1.
+
+------------------------------------------------------------------------
+
+-- Echo: Return an anonymous function that reports (true, s) on the
+--       first call, and (false, nil) thereafter.
+local function Echo(s)
+        local FirstTime = true
+        return function ()
+                if FirstTime then
+                        FirstTime = false
+                        return true, s
+                end
+                return false, nil
+        end
+end
+
+------------------------------------------------------------------------
+
+-- Expect: Return an anonymous function that can incrementally collect
+-- data (e.g. from a pipe relating to stdout or stderr of a child
+-- process, reading/calling being done by a third party), plus an extra
+-- call with nil to signify the end of the stream, and returns one of
+-- three outputs:
+--      1.  true:  The expected data was received;
+--      2.  false: We've received more data than expected, or the stream
+--                 terminated but the data doesn't match; or
+--      3.  nil:   We have less data than we expect, and/or haven't been
+--                 told that the stream has ended, so report nil to let
+--                 the caller know that we can't make a determination
+--                 yet.
+local function Expect(s)
+        local AccumData = ""
+        return function(Received)
+                if Received == nil then
+                        if AccumData == s then
+                                return true
+                        else
+                                return false, AccumData
+                        end
+                end
+                AccumData = AccumData .. Received
+
+                -- If we've already got more data than we expect, the
+                -- test has failed.  This test lets the caller know
+                -- immediately that something is wrong... but in some
+                -- cases, we may truncate valuable output that might
+                -- help diagnose the failure.
+                if #AccumData > #s then
+                        return false, AccumData
+                end
+                return nil
+        end
+end
+
+------------------------------------------------------------------------
+
+local function Unexpected()
+        -- Accumulate any text that's received in AccumData.
+        -- A nil parameter means end-of-data, and we report success
+        -- only if AccumData is empty.
+        -- Any type other than string or nil is a failure.
+        local AccumData = ""
+        return function(Received)
+                local t = type(Received)
+                if t == "string" then
+                        AccumData = AccumData .. Received
+                elseif t == "nil" then
+                        if #AccumData == 0 then
+                                return true
+                        else
+                                return false, AccumData
+                        end
+                else
+                        -- Any other parameter type is not acceptable
+                        return false, "Unexpected type: " .. t
+                end
+        end
+end
+
+------------------------------------------------------------------------
+
+local UnescapeTable = {}
+
+for i = 0, 31 do
+        local Oct2 = i / 64;
+        local Oct1 = (i % 64) / 8
+        local Oct0 = i % 8
+        UnescapeTable[i] = string.format("\\%d%d%d", Oct2, Oct1, Oct0)
+end
+for i = 32, 126 do
+        UnescapeTable[i] = string.char(i)
+end
+for i = 127, 255 do
+        local Oct2 = i / 64;
+        local Oct1 = (i % 64) / 8
+        local Oct0 = i % 8
+        UnescapeTable[i] = string.format("\\%d%d%d", Oct2, Oct1, Oct0)
+end
+for _, Esc in ipairs{{'\\', '\\\\'},
+                     {'\a', '\\a'},
+                     {'\b', '\\b'},
+                     {'\f', '\\f'},
+                     {'\n', '\\n'},
+                     {'\r', '\\r'},
+                     {'\t', '\\t'},
+                     {'\v', '\\v'},
+                     {'\'', '\\\''},
+                     {'\"', '\\"'},
+                     {'\?', '\\?'}} do
+        UnescapeTable[string.byte(Esc[1])] = Esc[2]
+end
+
+local function Unescape(v)
+        local r = {}
+        for i = 1, #v do
+                r[i] = UnescapeTable[string.byte(v:sub(i, i))]
+        end
+        return table.concat(r, "")
+end
+
+------------------------------------------------------------------------
+
+local function ShowFailure (Env, i)
+        printf("\n    FAILED.%d\n        Exec: %s", i, Env.Program)
+        for _, v in ipairs(Env.CmdlineArgs) do
+                printf(" '%s'", Unescape(v))
+        end
+        io.write("\n        stdin, out, err:")
+        printf(" '%s', '%s', '%s'",
+               Unescape(Env.Run.stdin),
+               Unescape(Env.Run.out),
+               Unescape(Env.Run.err))
+        io.write("\n        Got:")
+        for k, v in pairs(Env.Results) do
+           printf(" %s=%s", k, tostring(v))
+                if k == "Status" and
+                   Env.Expected.Status ~= Env.Results.Status then
+                           printf(" [expected %s]",
+                                  Env.Expected.Status)
+                end
+        end
+        io.write("\n")
+end
+
+------------------------------------------------------------------------
+
+-- Execute test(s) listed in the line, as interpreted according to the
+-- specified environment.
+local function RunTests(Env, Line)
+        local Fields = LexLineIntoFields(Line, Env.Delim)
+        if #Fields ~= #Env.Layout then
+                error("Field/layout mismatch: " .. Line)
+        end
+        -- Deal with each field according to layout
+        for i, v in ipairs(Fields) do
+                Env.Exec[Env.Layout[i]] = v
+        end
+
+        Env.Expected.Demise = "exited"
+        Env.Expected.Status = 0
+
+        -- ?? Could iterate across a delim-separated list of patterns
+        -- here in the future...
+        Env.CmdlineArgs = {}
+        for _, opt in ipairs(Env.Opts) do
+                Env.CmdlineArgs[#Env.CmdlineArgs + 1] = opt
+        end
+        Env.CmdlineArgs[#Env.CmdlineArgs + 1 ] = "--"
+        Env.CmdlineArgs[#Env.CmdlineArgs + 1 ] = Env.Exec.Pattern[1]
+
+        -- Now execute the tests, as specified
+        if #Env.Exec.Match > 0 then
+                Env.Expected.Demise = "exited"
+                Env.Expected.Status = 0
+
+                printf("%-28s ", Env.SectionName ..".Match")
+                io.flush()
+                for i, v in ipairs(Env.Exec.Match) do
+                        local vLF = v .. "\n"
+                        RunOneTest(Env,
+                                   Echo(vLF),
+                                   Expect(vLF),
+                                   Unexpected())
+                        if not Env.Summary.OK then
+                                ShowFailure(Env, i)
+                        else
+                                io.write(".")
+                        end
+                        io.flush()
+                end
+                io.write("\n")
+        end
+
+        if #Env.Exec.Trouble > 0 then
+                Env.Expected.Demise = "exited"
+                Env.Expected.Status = 2
+
+                printf("%-28s ",
+                       Env.SectionName ..".Trouble")
+                for i, v in ipairs(Env.Exec.Trouble) do
+                        local vLF = Env.Program .. ": " .. v .. "\n"
+                        RunOneTest(Env,
+                                   Echo(""),
+                                   Unexpected(),
+                                   Expect(vLF))
+                        if not Env.Summary.OK then
+                                ShowFailure(Env, i)
+                        else
+                                io.write(".")
+                        end
+                        io.flush()
+                end
+                io.write("\n")
+        end
+
+        if #Env.Exec.NoMatch > 0 then
+                Env.Expected.Demise = "exited"
+                Env.Expected.Status = 1
+
+                printf("%-28s ",
+                       Env.SectionName ..".NoMatch")
+                io.flush()
+                for i, v in ipairs(Env.Exec.NoMatch) do
+                        local vLF = v .. "\n"
+                        RunOneTest(Env,
+                                   Echo(vLF),
+                                   Unexpected(),
+                                   Unexpected())
+                        if not Env.Summary.OK then
+                                ShowFailure(Env, i)
+                        else
+                                io.write(".")
+                        end
+                        io.flush()
+                end
+                io.write("\n")
+        end
+
+        if #Env.Exec.XFailShow > 0 then
+                printf("%-28s ",
+                       Env.SectionName ..".XFailShow")
+                io.flush()
+                for i, v in ipairs(Env.Exec.XFailShow) do
+                        local vLF = v .. "\n"
+                        RunOneTest(Env,
+                                   Echo(vLF),
+                                   Unexpected(),
+                                   Unexpected())
+                        io.write(Unescape(v), " ")
+                        io.flush()
+                end
+                io.write("\n")
+        end
+end
+
+------------------------------------------------------------------------
+
+-- Parse the test input, which, although it looks like a
+-- bash-script-in-drag, is actually a hybrid of:
+--    1. Bash comments:  Lines starting with # (optional preceding
+--       whitespace);
+--    2. Section directives: Valid Lua code, laying out section
+--       name, invariant values/options for all tests in the section,
+--       plus a short schema describing how test fields are laid out.
+--    3. Test groups, one group per line, with fields seaprated by
+--       whitespace (use quotes if necessary).  The schema describes
+--       how the fields are to be interpreted.  Multiple test items
+--       can be contained in a single field, separated by Delim.
+
+local f = io.stdin
+for l in f:lines() do
+        if l:match("^%s*#") then
+                -- Comment, ignored
+        elseif l:match("^%s*$") then
+                -- Blank line, ignored
+        elseif l:match("^Section{") then
+                -- Section directive, Test layout, possibly other opts
+                assert(loadstring(TestHeader .. l))()
+                local Opts = TestEnvGlobals.Opts
+                if type(Opts) == "string" then
+                         Opts = LexLineIntoFields(Opts, nil)
+                         TestEnvGlobals.Opts = Opts
+                end
+        else
+                -- Test group; break up into fields, and run tests
+                -- as requested
+                RunTests(TestEnvGlobals, l)
+   end
+end
+
+return WorstStatus
+
+-- :vim: set ts=8:et:sw=8:

@@ -1,0 +1,46 @@
+2015-02-10  behoffski <behoffski@grouse.com.au>
+
+	Version 0.12
+	* Added Grouse Software copyright notices, as per request from
+	  Savannah managers.
+
+	hstbm isn't an official GNU project, and so the recommended
+	initial copyright profile is to acknowledge both GNU Grep as the
+	base for forked code (FSF copyright), with the presentation here
+	also acknowledging copyright by Grouse Software.
+
+	See Savannah Task #13451 for the discussion that led to this
+	change, especially Comment #8:
+	https://savannah.gnu.org/task/?func=detailitem&item_id=13451
+
+2015-01-25  behoffski <behoffski@grouse.com.au>
+
+	Version 0.11
+	* Revised Savannah submission, following feedback.
+
+	Copyright notices have been added or clarified in many of the
+	files under the hstbm/ tree, including:
+	- bootstrap, po/Makefile.am, src/Makefile.am, tests/Makefile.am,
+	  README, tests/*
+
+	The program version reported by --version now incorporates
+	source tree commits/revision/dirty information provided by
+	"git describe", just as GNU Grep does; the code is derived from
+	Grep's build-aux/git-version-gen, but writes a C include file
+	(src/.git_current_version.h) that is used by src/main.c.
+	If Git isn't installed, a default is provided, naming the base
+	release number, plus a "[source state uncertain]" disclaimer.
+	See src/Makefile.am, src/.update_git_current_version and
+	src/main.c for implementation details.
+
+	README now includes more guidance on how to install the
+	Lua-related dependencies; these are needed for the test rig.
+
+	Some Autotools-generated configuration files, namely
+	*/Makefile.in, have been removed, as they are unnecessary and
+	possibly incorrect for some platforms.
+
+2015-01-18  behoffski <behoffski@grouse.com.au>
+
+	Version 0.10
+	* Original Savannah project submission.

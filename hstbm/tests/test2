@@ -1,0 +1,160 @@
+#!/bin/sh
+
+# test2 -- Initial set of regression tests
+
+# This file mixes at three languages into the one file, and there
+# can be some overlap between the languages to (hopefully) allow
+# clear and concise expression of tests.
+
+# The outer language is a shell script.  Simple environment
+# variables can be set and expanded inside tests to parameterise
+# and/or make test descriptions more terse, focussed and readable.
+
+# Various sh features can be used in constructing the contents 
+# of each line.  One initial feature is that blank lines, and
+# lines starting with # (ignoring whitespace) are ignored.
+
+# The "here-doc" feature of the shell (<<EOF) is especially
+# important, as the shell hands control of all the remaining text 
+# to the program regression.rig, which is a lua script.  So, we
+# have a hybrid of the shell and of lua at this point...
+
+# The text of the here-doc is a blend of one-liner Lua function
+# calls and one-liner test specifications.  End-of-text-line
+# escapes (\) are used so that long specifications are still
+# rendered by the here-doc as one line.  At the time of writing,
+# there is only one Lua function defined: Section.  This
+# function takes parameters that name the tests in the section
+# for readability, describe the layout of fields in the test
+# line(s) that follow, and optionally other information such as
+# the delimiter between lists of test elements.
+
+# Each test start with a Section header, which is a Lua function
+# call, with named parameters to the call captured in a {} table.
+# All following lines within that section are test specifications
+# with a layout specified in the section header.  Typically,
+# multiple tests are packed into each field, with a user-selectable
+# delimiter between items (the default delimiter is ':').  The
+# tests try to especially probe completeness and boundary/edge
+# cases, e.g. that a match for "[2-48]" matches 2, 3, 4, and 8, but
+# doesn't match any of 1, 5, 7 or 9.
+
+# The third language is the one-liners within each section, that
+# describe the set(s) of tests to be applied.  The lua script
+# manually parses these test lines into fields, and also breaks
+# multi-element fields into individual pieces.  The set(s) of
+# elements in each field, whose purpose is defined by the field
+# name in the "Section.Layout" specification, then drive the test
+# rig.
+
+# One early aim of the test is to probe edge cases, e.g. for the
+# class "[0-9]", check that 0, 1 8 and 9 are members of the class,
+# but also check closely that values just outside the class
+# (looking only at ASCII here) such as "." and "/" just before
+# "0", and ":" and ";" just after "9", do *not* match.
+
+#--[[
+# NOTE: Nearly all files in hstbm are derived from GNU Grep, and so
+# are owned by the FSF and have GPL3 license; however, a few files,
+# heavily dependent on Lua and created independently of GNU Grep, are
+# owned by Grouse Software, and have the MIT License in order to be
+# compatible with the Lua ecosystem.  Any file not explicitly marked
+# is intended to be FSF-owned and GPL3-licensed.
+#
+# This file (test2) is licensed under the MIT License.
+# --]]
+
+# --[[
+# Copyright (c) 2014-2015 Grouse Software
+# Written by behoffski (Brenton Hoff).
+
+# Permission is hereby granted, free of charge, to any person
+# obtaining a copy of this software and associated documentation
+# files (the "Software"), to deal in the Software without restriction,
+# including without limitation the rights to use, copy, modify, merge,
+# publish, distribute, sublicense, and/or sell copies of the Software,
+# and to permit persons to whom the Software is furnished to do so,
+# subject to the following conditions:
+
+# The above copyright notice and this permission notice shall be
+# included in all copies or substantial portions of the Software.
+
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+# EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+# NONINFRINGEMENT.  IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+# BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+# ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+# CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+# --]]
+
+DIGITS="_0;_1;_2;_3;_4;_5;_6;_7;_8;_9"
+LOWER="_a;_b;_c;_d;_e;_f;_g;_h;_i;_j;_k;_l;_m;_n;_o;_p;_q;_r;_s;_t;_u;_v;_w;_x;_y;_z"
+UPPER="_A;_B;_C;_D;_E;_F;_G;_H;_I;_J;_K;_L;_M;_N;_O;_P;_Q;_R;_S;_T;_U;_V;_W;_X;_Y;_Z"
+XDIGITS="$DIGITS;_a;_b;_c;_d;_e;_f;_A;_B;_C;_D;_E;_F"
+
+./regression.rig "$0" <<EOF
+
+# At least initially, the boundary checking is biased towards ASCII;
+# EBCDIC should also be checked, but my resources are limited.
+
+Section{"Simple", Layout = {Pattern, Match, NoMatch}}
+bd "bd:bbd:bdd:abd:bde" "ad:cd:db:cd:bc:be:ae:ce:acd:abc:abe"
+
+Section{"Ranges", Layout = {Pattern, Match, NoMatch}}
+_[0-9]  "_0:_1:_2:_3:_4:_5:_6:_7:_8:_9" "_/:_%%:_\xef:_\xfa"
+_[2-48] "_2:_3:_4:_8" "_0:_1:_5:_6:_7:_9"
+
+Section{"[[:alnum:]] (# delim)", Delim="#", \
+		     Layout = {Pattern, Match, NoMatch}}
+%[[:alnum:]]  "%a#%b#%c#%d#%e#%f#%g#%h#%i#%j#%k#%l#%m#%n#%o#%p#%q#%r" ""
+%[[:alnum:]]  "%s#%t#%u#%v#%w#%x#%y#%z#%0#%1#%2#%3#%4#%5#%6#%7#%8#%9" \
+  "%)#%*#%+#%,#%-#%.#%/#%:#%;#%<#%=#%>#%?#%@#%[#%\\#%]#%^#%_#%\`#%{#%|#%}#%~"
+
+Section{"[[:alnum:]]", Delim=";", Layout = {Pattern, Match, NoMatch}}
+_[[:alnum:]]  "$LOWER;$UPPER;$DIGITS" ""
+
+Section{"[[:alpha:]]", Delim=";", Layout = {Pattern, Match, NoMatch}}
+_[[:alpha:]]  "$LOWER;$UPPER" "$DIGITS"
+
+Section{"[[:blank:]]", Delim=";", Layout = {Pattern, Match, NoMatch}}
+_[[:blank:]]  "_ ;_	" ""
+
+Section{"[[:cntrl:]]", Delim=";", Layout = {Pattern, Match, NoMatch}}
+_[[:cntrl:]]  "_\x00;_\x01;_\x02;_\x03;_\x04;_\x05;_\x06;_\x07" \
+	      "_\xf0;_\xf1;_\xf2;_\xf3;_\xf4;_\xf5;_\xf6;_\xf7"
+
+# Test is *too* successful!  cntrl matches \n (\x0a), which stuffs
+# up the very restrictive, controlling mindset of the test rig.  At
+# present, we merely omit this case.
+_[[:cntrl:]]  "_\\x08;_\\x09;_\\x0b;_\\x0c;_\\x0d;_\\x0e;_\\x0f" \
+              "_\xf8;_\xf9;_\xfa;_\xfb;_\xfc;_\xfd;_\xfe;_\xff"
+_[[:cntrl:]]  "_\x10;_\x11;_\x12;_\x13;_\x14;_\x15;_\x16;_\x17" \
+	      ""
+_[[:cntrl:]]  "_\x18;_\x19;_\x1a;_\x1b;_\x1c;_\x1d;_\x1e;_\x1f" \
+                      "_\x20;_\x21;_\x22;_\x23;_\x24;_\x25"
+
+Section{"[[:digit:]]", Delim=";", Layout = {Pattern, Match, NoMatch}}
+_[[:digit:]]  "$DIGITS" "_/;_:;_\\xef;_\\xfa"
+
+Section{"[[:graph:]]", Delim=";", Layout = {Pattern, Match, NoMatch}}
+_[[:graph:]]  "$LOWER;$UPPER;$DIGITS" ""
+
+Section{"[[:lower:]]", Delim=";", Layout = {Pattern, Match, NoMatch}}
+_[[:lower:]]  "$LOWER" "$UPPER;$DIGITS"
+
+Section{"[[:print:]]", Delim=";", Layout = {Pattern, Match, NoMatch}}
+_[[:print:]]  "$UPPER" ""
+_[[:print:]]  "$LOWER;$DIGITS" ""
+
+Section{"[[:punct:]]", Delim="x", Layout = {Pattern, Match, NoMatch}}
+_[[:punct:]]  '_!x_"x_#x_$x_%x_&x_\'x_(x_)x_*x_+x_,x_-x_.x_/x_:x_;x_<x_=x_>x_?x_@' ''
+_[[:punct:]] '_[x_\\\\x_]x_^x__x_\`x_{x_|x_}x_~' ''
+
+Section{"[[:upper:]]", Delim=";", Layout = {Pattern, Match, NoMatch}}
+_[[:upper:]]  "$UPPER" "$LOWER;$DIGITS"
+
+Section{"[[:xdigit:]]", Delim=";", Layout = {Pattern, Match, NoMatch}}
+_[[:xdigit:]] "$XDIGITS" ""
+EOF

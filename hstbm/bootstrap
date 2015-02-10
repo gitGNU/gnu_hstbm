@@ -1,0 +1,68 @@
+#!/bin/bash
+
+# bootstrap -- Set up third-party resources (mainly Gnulib) for hstbm
+# Copyright (C) 2015 Grouse Software
+
+# Copying and distribution of this file, with or without modification,
+# are permitted in any medium without royalty provided the copyright
+# notice and this notice are preserved.  This file is offered as-is,
+# without any warranty.
+
+GNULIB_GIT_HOME=../gnulib-git
+
+cat <<EOF
+
+
+### Retrieving current entire Gnulib libraries (via git)...
+
+EOF
+mkdir -p "$GNULIB_GIT_HOME"
+pushd "$GNULIB_GIT_HOME"
+git clone git://git.savannah.gnu.org/gnulib.git
+popd
+
+cat <<EOF
+
+
+### Importing modules into hstbm workspace...
+
+EOF
+"$GNULIB_GIT_HOME/gnulib/gnulib-tool" --source-base=gnulib \
+                           --import memchr2 xalloc memrchr regex
+
+# Set up remainder of build environment using autoreconf/automake.
+cat <<EOF
+
+
+### Running autoreconf/automake to set up build environment...
+
+# (Note that autoreconf reports a number of "Required file not found"
+# errors, but this should not be a problem, as this script also runs
+# "automake --add-missing" to fill in the gaps.)
+
+EOF
+autoreconf
+automake --add-missing
+
+cat <<EOF
+
+########################################################################
+
+# Bootstrap completed.
+
+# Use the following commands to configure, build, get in-program help,
+# and exercise the test rig.  The test rig is still in its infancy,
+# and especially test0 and test1 are intended to evaluate the
+# performance of the rig, rather than check the hstbm program (src/h)
+# itself.  The output of test2 is more readable, but its coverage is
+# small.
+
+        $ ./configure
+        $ make
+        $ src/h --help
+
+# (Assuming Lua, LuaRocks, strictness and luaposix are installed:)
+
+        $ make check
+
+EOF

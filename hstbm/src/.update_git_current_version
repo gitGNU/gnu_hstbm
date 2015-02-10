@@ -1,0 +1,37 @@
+# .update_git_current_version
+# If git is installed, and "git describe" produces information about the
+# state of the source tree, then create a one-line header file, defining
+# a preprocessor macro with this information, for use by C code.
+
+# Copyright (C) 2007-2015 Free Software Foundation, Inc.
+# Copyright (C) 2015 Grouse Software
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+# This script is derived from build-aux/git-version-gen, which, in turn,
+# states that it is derived from GIT-VERSION-GEN from GIT:
+# http://git.or.cz/.
+
+# Ask git (if installed) for a description of the state of the source
+# tree.
+GIT_DESCRIBED_VERSION=`git describe --dirty --abbrev=4 2>/dev/null`
+
+# If we received some output, then presumably it's the description from
+# git, so write it out to a header file for use by C code.  If there's no
+# output, we assume git isn't installed, and so leave the existing
+# (probably original) file untouched.
+if [ ! -z "$GIT_DESCRIBED_VERSION" ] ; then
+    echo "#define GIT_CURRENT_VERSION \"$GIT_DESCRIBED_VERSION\"" \
+                    >.git_current_version.h
+fi

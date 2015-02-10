@@ -1,0 +1,65 @@
+#!/bin/sh
+
+# test1 -- Check exit_trouble messages
+
+./regression.rig "$0" <<EOF
+
+# This file is a bash script, and various Bash features can be used
+# in constructing the contents of each line.  One initial feature is
+# that blank lines, and lines starting with # (ignoring whitespace)
+# are ignored.
+
+# Each test start with a Section header, which is a Lua function
+# call, with named parameters to the call captured in a {} table.
+# All following lines within that section are test specifications
+# with a layout specified in the section header.  Typically,
+# multiple tests are packed into each field, with a user-selectable
+# delimiter between items (the default delimiter is ':').  The
+# tests try to especially probe completeness and boundary/edge
+# cases, e.g. that a match for "[2-48]" matches 2, 3, 4, and 8, but
+# doesn't match any of 1, 5, 7 or 9.
+
+#--[[
+# NOTE: Nearly all files in hstbm are derived from GNU Grep, and so
+# are owned by the FSF and have GPL3 license; however, a few files,
+# heavily dependent on Lua and created independently of GNU Grep, are
+# owned by Grouse Software, and have the MIT License in order to be
+# compatible with the Lua ecosystem.  Any file not explicitly marked
+# is intended to be FSF-owned and GPL3-licensed.
+#
+# This file (test1) is licensed under the MIT License.
+# --]]
+
+# --[[
+# Copyright (c) 2014-2015 Grouse Software
+# Written by behoffski (Brenton Hoff).
+
+# Permission is hereby granted, free of charge, to any person
+# obtaining a copy of this software and associated documentation
+# files (the "Software"), to deal in the Software without restriction,
+# including without limitation the rights to use, copy, modify, merge,
+# publish, distribute, sublicense, and/or sell copies of the Software,
+# and to permit persons to whom the Software is furnished to do so,
+# subject to the following conditions:
+
+# The above copyright notice and this permission notice shall be
+# included in all copies or substantial portions of the Software.
+
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+# EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+# NONINFRINGEMENT.  IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+# BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+# ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+# CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+# --]]
+
+Section{"Invalid patterns (trouble report correct)", Delim=";", Layout = {Pattern, Trouble}}
+"abc[123" "Unmatched [ or [^"
+"[[.y.]]" "Sorry, collation classes (e.g. [.y.]) not supported"
+
+Section{"Invalid Patterns (trouble report mismatch)", Delim=";", Layout = {Pattern, Trouble}}
+"[[.y.]]" "Sorry, chicken chicken chicken chicken chickens chicken"
+
+EOF

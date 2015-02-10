@@ -1,0 +1,335 @@
+    Copyright (C) 2015 Grouse Software
+
+    Copying and distribution of this file, with or without modification,
+    are permitted in any medium without royalty provided the copyright
+    notice and this notice are preserved.  This file is offered as-is,
+    without any warranty.
+
+Introducing htsbm: Hybrid Self-Tuning Boyer Moore
+
+This is an experimental program, which imitates about 1% of the functionality
+of GNU Grep, but tries to let users experiment almost exclusively with the
+Boyer-Moore family of string searches.  The code is related to GNU Grep in
+a number of places, to the point where I've assigned almost all copyrights
+in this program to the FSF, and tried to acknowledge Grep authors as
+appropriate.  This is because, at a superficial level, it could be seen as
+a "exploratory fork" of GNU Grep; in practice, it is too minimal and
+experimental to live up to that standard.  The acronym comes from:
+
+Boyer-Moore (B-M)       -- Well-known "sub-linear" fast string search, with
+                           a fast "skip" loop and a slower "match" loop;
+
+Tuned Boyer-Moore (TBM) -- Variant on B-M (with Sunday? Gosper? Horspool?
+                           Knuth-Morris-Pratt? Aho-Corsack? others?)
+                           improvements:
+     - Adding a "guard" test on the second-to-last character to try to stay
+       in the skip search and away from the much slower match loop; and
+     - Loop unrolling so that end-of-buffer tests happen less often.
+
+     This code was the mainstay of string searching in GNU Grep until about
+     v2.19;
+
+Hybrid TBM (HTBM)       -- Many improvements over TBM, released in v2.19
+                           (22 May 2014), including:
+     - Adding support for a folding table, so that the much faster TBM
+       could be used for case-insensitive searches, instead of falling back
+       to the much slower DFA or perhaps Regex;
+     - Added Galail analysis of the pattern, so that a partial, but failed,
+       match attempt resulted in smarter skip and match heuristics, resulting
+       in a guaranteed worst-case running time much nearer linear time; and
+     - Added code to evaluate the performance of the TBM skip loop, and to
+       try using memchr or perhaps memchr2 to search for another pattern
+       element (if possible), as these can be parallelised, and may help in
+       breaking up bottlenecks cases where the skip search is presented with
+       pathalogical data, but the memchr searches scan alternate data that
+       does not present such problems.
+
+Self-Tuning Boyer-Moore (STBM)
+                        -- My own tweak on TBM, invented in April 1998:
+     - The guard position is allowed to float, instead of being fixed to
+       the second-to-last position;
+     - The guard position uses the last position where the match failed;
+       this usually leads a dynamic, data-responsive and slightly more
+       efficient guard than TBM.
+
+Hybrid Self-Tuning Boyer-Moore -- This program:
+     - A number of string search ideas can be traced back to "Grouse Grep",
+       my program published in November 1997 Dr Dobb's Journal;
+     - As mentioned, the self-tuning guard test idea dates to April 1998,
+       and was released in 2000;
+     - Incorporates some of the HTBM improvements, but not all; and
+     - Tries a few different ideas, such as seeking to use a pair of memchr
+       searches if the skip loop is inefficient; another is delta3 and
+       delta4 skips used after failed match attempts.
+
+The program superficially looks like a grep program, and supports a few
+grep options; use --help to see a detailed description.
+
+Due to historical reasons, laziness, and a lack of a clear idea for a
+better name, especially while the program is so experimental, the program
+is merely called "h" (sometimes "./h", "src/h", "../src/h", etc).
+
+--------------
+
+The program uses the GNU build system, and the following tools from
+gnulib, using the gnulib-tool script:
+
+     memchr2
+     memrchr
+     regex
+     xalloc
+
+The "bootstrap" script checks out the entire Gnulib git head into a
+partner directory, and then uses gnulib-tool to perform the import.
+
+Command-line parsing is done by the GNU getopt(3) facility.
+
+Building the code can be done by the following commands:
+
+     ./bootstrap
+     ./configure
+     make
+
+You can then run the program, to check the version, using the -V
+or --version option:
+
+     src/h --version
+     src/h -V
+
+An experimental regression test rig is included.  This rig requires
+Lua 5.1 or 5.2, and also requires some Lua support modules (rocks).
+
+The Lua support for major distributions typically involves four steps;
+there may be some extra packages brought in by some of these steps, but
+in general Lua, and its associated ecosystem, is relatively modest in
+its system requirements.  The steps (with example commands for a
+Debian system) are as follows; most or all of these steps fetch packages
+from the Internet, and install them as root, so use them at your own
+risk.  (You may have some or all of these packages already installed on
+your system.)
+
+     1. Install Lua, either version 5.1 or version 5.2
+        * Debian: $ sudo apt-get install lua5.2
+
+     2. Install LuaRocks third-party package manager
+        * Debian: $ sudo apt-get install luarocks
+
+     3. Using LuaRocks, install strictness
+        * Debian: $ sudo luarocks install strictness
+
+     4. Using LuaRocks, install luaposix
+        * Debian: $ sudo luarocks install luaposix
+
+Once Lua and its support modules are installed, you can try the test
+rig from the hstbm directory with:
+
+     make check
+
+The in-program help is modelled on GNU Grep.  The command is given here;
+the initial output (as of Version 0.11) is included below.
+
+     src/h --help
+
+The build system also recognises "make clean" and "make distclean".  
+
+The code is written to conform to a (slightly conservative) version of
+the C89 standard.  However, it has not be tried on many different
+machines, let alone different architectures.  I've tried to keep aware
+of potential portability issues while coding, but it's easy to slip up.
+
+--------------
+
+Because of the exclusive focus on B-M-family searches, many, many pattern
+features, even simple things like '^' to anchor the search to the start of
+a line, are not supported.
+
+However, the program *does* support classes in patterns to a greater
+extent than merely the simple classes implied by case insensitivity, e.g.:
+
+      "123[abc]456"
+
+The folding table is only a single, simple 1-to-1 mapping, so there are
+restrictions on classes allowed in the matcher area:
+
+      OK: src/h -i "123[abc]456"
+      No: src/h -i "ab[bcd]e"    ("b" overlap: "[Bb]" and "[BCDbcd]")
+      No: src/h "ab[bcd]e"       ("b" overlap: "b"    and "[BCDbcd]")
+      OK: src/h "[ab][cd][bc]"   (last position is skip, not matcher, so OK)
+      No: src/h "[ab][cd][bc]e"  ("[bc]" isn't last; it overlaps both
+                                  "[ab]" and "[cd]")
+
+The program optimises the case where the only place where folding occurs
+is in the final position, as this is covered by the skip loop:  It uses
+the exact-match loop. not the folded-character loop:
+
+      "12345u"
+      "12345[[:punct:]]"
+
+The program only supports unibyte locales; multibyte (e.g. UTF-8) is not
+supported.  One curious case is support for some ISO 8859-1 locales;
+check out the performance (in locale "fr_FR.iso88591") of:
+
+     src/h -c "tr[[=e=]]s" candide-8859-1.txt
+
+versus:
+
+     grep -c  "tr[[=e=]]s" candide-8859-1.txt
+
+(Project Gutenburg was the source for Voltaire's Candide; I used iconv to
+convert UTF-8 to ISO_8859-1.)
+
+There are many, many, many features and switches in GNU Grep that are
+missing from this code; two options not in GNU Grep are interesting:
+
+  -J, --show-internals Write information about the internal data
+                       structures used by the program, possibly
+                       including the tokenised form of the pattern,
+                       to stderr (for use in debugging).
+  -K, --efficiency-threshold=VALUE
+                       Specify how many bytes the skip (STBM) search
+                       must eliminate each iteration in order to be
+                       considered efficient; if inefficient, switch to
+                       the hybrid (memchr/memchr2) search algorithms to
+                       try and make more progress.  The value 0 disables
+                       the hybrid alternative altogether.
+
+Initial critique of the code:  The performance looks promising in a number
+of cases, but pathalogical data could bring the entire machinery to a
+near-standstill.  Using round-robin techniques is implemented in a couple
+of places to try and reduce this likelihood; admittedly this is an area
+where I haven't worked hard to stress the algorithm(s).
+
+Sometimes including class(es) in a B-M-family search may be a risky
+proposition; a higher-level controller might need to try tentative searches
+and be willing to switch algorithms based on the measured efficiency.  Such
+intelligence isn't included here, so that simple comparisons can be made.
+
+--------------
+
+The regression test rig is written in Lua, and is very incomplete; it's
+interesting, however, in how it allows a tester to craft a very focussed,
+terse but readable set of tests to probe the edge cases of a program
+facility; more test types can be added easily (i.e. it implements a
+domain-specific language).  The test files are:
+
+    - test0: This file merely exercises the test rig itself, to see that
+             various escape sequences are handled correctly.  This test is
+             poor in that it is not fully automated:  A human must inspect
+             the output for correctness.
+    - test1: Only written as a demonstration of how a "trouble" error exit
+             case can be coded, with 2 successful tests, and one deliberate
+             failure.
+    - test2: The only real testing of the program at present, it tries a
+             few simple patterns, plus quite a number of named character
+             classes; and
+
+The Lua program implementing the rig is "regression.rig", which in turn
+invokes the test program directly (using fork (2)) via the helper code in
+PosixExec.lua; these programs, in turn, require "luarocks" to be installed,
+and the rocks "luaposix" and "strictness" to then be installed.  The code
+has mainly been tested with:
+
+    - Lua 5.1;
+    - LuaRocks 2.0.9;
+        - strictness 0.2.0-1
+        - luaposix 33.2.1-1
+
+(License note:  This program is mostly an exploratory derivative of GNU
+Grep, and so almost all the sources have the FSF as the Copyright owner,
+and have explicit GPL3 licensing.  The regression test rig, however, is
+entirely my own creation, names me as the Copyright owner, and has the
+OSI-comptible MIT (permissive) license;  this is so that these files can
+participate in the Lua ecosystem.)
+
+--------------
+
+I've been occasionally releasing an "untangle" script to match the releases
+of GNU grep; the purpose of untangle is to improve the coherence and
+high-level abstraction of pattern data reaching top-level program logic,
+so that, instead of just looking for "must-have" fixed strings, such as
+"123" and/or "456", the code has enough information to be able to consider
+suitable hybrid searches for HSTBM, such as "123[abc]456".  One example of
+this attempt is the presence of both "CHAR_CLASS" and "CHAR_CLASS_INVERTED"
+tokens in the overall hstbm program; the conversion from an inverted to a
+plain class is not trivial, and an inverted class might influence how a
+search planning algorithm chooses to proceed.
+
+In effect, "untangle" is an attempt to improve GNU grep by working to
+modularise the code in a "bottom-up" fashion, whereas "hstbm" tries to
+demonstrate the benefits of the search algorithms by presenting a
+trimmed-down "top-down" program.  I hope that these efforts can meet in the
+middle one day; the "charclass" module produced by "untangle" has already
+been invaluable in writing class handling, match optimisation and conflict
+analysis in hstbm.
+
+--------------
+
+Here is the output of "src/h --help", as of Version 0.11:
+
+    Usage: src/h [OPTION]... PATTERN [FILE]...
+    Search for PATTERN in each FILE, and/or in standard input.
+
+    PATTERN is limited to a simple fixed string, apart from allowing some
+    limited character classes and/or case-insensitive matches; in most
+    cases, there must be no overlap between classes.  The pattern must
+    not be too short (less than 2 chars); nor must it be too long (more
+    than 255 chars).
+    Example: src/h '123[abc]456' metadata intercepts.txt stockprices.xml
+
+    Pattern selection and interpretation:
+      -e, --regexp=PATTERN  Use PATTERN for matching
+      -i, --ignore-case     Ignore case distinctions
+
+    Miscellaneous:
+      -V, --version        Display version information and exit
+          --help           Display this help text and exit
+      -J, --show-internals Write information about the internal data
+                           structures used by the program, possibly
+                           including the tokenised form of the pattern,
+                           to stderr (for use in debugging).
+      -K, --efficiency-threshold=VALUE
+                           Specify how many bytes the skip (STBM) search
+                           must eliminate each iteration in order to be
+                           considered efficient; if inefficient, switch to
+                           the hybrid (memchr/memchr2) search algorithms to
+                           try and make more progress.  The value 0 disables
+                           the hybrid alternative altogether.
+
+    Output control:
+      -b, --byte-offset    Print input file's 0-based byte offset of each
+                           output line
+      -c, --count          Print only a count of matching lines per FILE
+      -H, --with-filename  Print the filename for each match
+      -h, --no-filename    Suppress the filename prefix on output
+      -Z, --null           Print NUL (0 byte) after FILE name
+
+    When FILE is -, or if no FILE is given, read standard input (there
+    is no -r option).  If -h and/or -H are specified, the last such
+    option controls filename output; otherwise, assume -H if multiple
+    files are specified to be searched, and -h if only one file is to
+    be searched.
+
+    Exit status is:
+      >1 if any unexpected error occurs (note: we do not support -q);
+            and/or
+      2  if we identified trouble (e.g. invalid pattern syntax);
+      1  if we searched everything but no matches were found; or
+      0  if we found at least one match.
+
+(End of --help output.)
+
+--------------
+
+The program is certainly incomplete and buggy; one area poorly implemented
+is the handling of very long (>32K) lines.
+
+The program name cannot be too long (> 1536 characters), as otherwise the
+module program-trouble, with perhaps an overabundance of caution, will
+throw an assertion.
+
+It's possible that some or even all of the speedups I've seen are due to
+bugs; I've been aware of this possibility for a long time, and have tried
+to reduce this likelihood.
+
+All comments, feedback, bug reports, fixes, patches, ideas are welcome.
+

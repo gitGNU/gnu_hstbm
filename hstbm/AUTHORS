@@ -1,0 +1,23 @@
+Most of this code is derived from GNU Grep, with significant
+sections filtered through and/or reinterpreted by behoffski.
+Therefore, FSF copyrights are applied to all the sources.
+
+I (behoffski) invented a tweak to the Tuned Boyer-Moore
+string search algorithm in April 1998, and have wanted to
+incorporate the algorithm into GNU Grep for a long time.  After
+trying a bottom-up "untangle" process to try and facilitate
+lexing and parsing tools that provide information for good
+search algorithm selection, this program is instead a "top-down"
+approach that is, roughly (from the outside), a program that
+acts like fgrep much of the time, but has some character class
+support (including named classes and equivalence classes).
+
+The authors of GNU Grep, partially listed in the original
+AUTHORS file, some named in the ChangeLog, and more recently
+detailed in the Git logs, have probably contributed 98% of
+the code that I've based my work on here.
+
+The regression test rig is a curious hybrid of shell scripts
+and Lua framework; its initial coverage is very weak, and
+some of the more exotic tests may be harder to accommodate in
+Lua than in Bash or sh, but it shows some promise.

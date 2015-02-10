@@ -1,0 +1,6 @@
+# Ignore a version-stamp header file that is regenerated each time
+# main.o is built, if Git is installed.
+.git_current_version.h
+
+# Ignore the program file.
+h

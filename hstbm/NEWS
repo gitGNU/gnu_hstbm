@@ -1,0 +1,64 @@
+Hybrid Self-Tuning Boyer-Moore NEWS       -*- outline -*-
+
+* Version 0.12, 10 February 2015
+
+** Bug Fixes
+
+  Added Grouse Software copyright notices, in tandem with the FSF
+  notices, as requested by the Savannah administrators in Task
+  #13451 (Comment #8):
+
+  https://savannah.gnu.org/task/?func=detailitem&item_id=13451
+
+* Version 0.11, 25 January 2015
+
+** Improvements
+
+  Added dynamic Git version stamping (git describe ...) to the version
+  number reported by --version; and
+
+  Upgraded README to include some information on how to set up the
+  Lua environment required by the regression test rig.
+
+** Bug fixes
+
+  Improved copyright and licensing marking, including adding notices
+  to some files that were missing notices.
+
+* Version 0.10, 18 January 2015
+
+Initial release.
+
+This program (hstbm) is an exploratory fork of GNU Grep, intended
+to focus on only one of the half-dozen search capabilities in
+GNU Grep (the Hybrid Tuned Boyer-Moore search, part of
+src/kwset.c), and use a different algorithm (Self-Tuned
+Boyer-Moore) that I invented in about 1998 and published in 2000,
+updated to include the "Hybrid" memchr/memchr2 search options,
+and otherwise striving to be sufficiently similar and fair to
+GNU Grep that meaningful comparisons of performance can be made.
+
+The regression test rig (the subdirectory tests/, and especially
+the Lua scripts regression.rig and PosixExec.lua) are not derived
+from GNU Grep, and are licensed in line with the permissive MIT
+license used by the Lua project and many Lua-associated projects:
+           MIT licensed
+           Copyright (C) 2014-2015
+           by Grouse Software.
+           Written by behoffski.
+
+All other files, being based in part or whole on GNU Grep as an
+"exploratory fork" as mentioned above, are very heavily based on
+work owned by the Free Software Foundation Inc., and carry an FSF
+copyright notice accordingly.  In a few places, there has been
+some effort to reformat the code, sometimes in an effort to
+refactor and/or modularise the code.  The copyright in these
+changes is owned by Grouse Software.
+
+========================================================================
+    Copyright (C) 2015 Grouse Software
+
+    Copying and distribution of this file, with or without modification,
+    are permitted in any medium without royalty provided the copyright
+    notice and this notice are preserved.  This file is offered as-is,
+    without any warranty.
