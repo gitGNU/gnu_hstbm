@@ -1,0 +1,28 @@
+Hybrid Self-Tuning Boyer-Moore (hstbm)
+
+Installation notes:
+
+Do NOT install: Not production-strength code.
+
+No installation procedure defined at this stage, as the program
+is a demonstration/prototype entity, and is expected to only be
+used via local invocation (e.g. ./h or src/h) in its current
+embryonic state.
+
+Many search patterns deliberately cause an assertion because
+while any worthwhile Grep program should support them, the B-M
+algorithm is not suited to performing the search, and hstbm
+deliberately focuses exclusively on high-performance B-M code.
+
+The program does this to emphasise the experimental/prototype
+nature of the hstbm code, and to reduce the chances of false
+comparisons being made because of semantically different
+searches.
+
+========================================================================
+Copyright (C) 2015 Grouse Software
+
+  Copying and distribution of this file, with or without modification,
+  are permitted in any medium without royalty provided the copyright
+  notice and this notice are preserved.  This file is offered as-is,
+  without any warranty.
