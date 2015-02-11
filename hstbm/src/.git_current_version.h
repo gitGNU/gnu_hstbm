@@ -24,4 +24,4 @@
    Foundation, Inc.,
    51 Franklin Street - Fifth Floor, Boston, MA  02110-1301, USA */
 
-#define GIT_CURRENT_VERSION "0.12 [source state uncertain]"
+#define GIT_CURRENT_VERSION "0.13 [source state uncertain]"

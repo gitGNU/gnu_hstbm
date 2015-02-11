@@ -1,5 +1,24 @@
 Hybrid Self-Tuning Boyer-Moore NEWS       -*- outline -*-
 
+* Version 0.13, 11 February 2015
+
+** Hacks
+
+  Earlier releases (Savannah task submission) were based on a
+  private repository, and the tarball created via a release script
+  was intact.  The tarball included a shiny new git repository.
+  However, a few files were included correctly in the tarball, but
+  an overenthusiastic .gitignore file meant that these files were
+  silently omitted from the Git repository... this omission exposed
+  when the repository was copied to the Savannah server with
+  "git push".
+
+  Having some essential files uncontrolled meant that Savannah's
+  "You tag it, I'll tarball it" feature resulted in an incomplete
+  set of sources.  So, the extra rules have been removed from
+  .gitignore, the missing sources have been added, and a new version
+  has been created and tagged.
+
 * Version 0.12, 10 February 2015
 
 ** Bug Fixes
